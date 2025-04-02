@@ -18,7 +18,7 @@
     #controls-top, #controls-bottom {
       margin: 1em;
     }
-    /* Removed canvas border to eliminate the square frame */
+    /* Remove canvas border to eliminate the square frame */
     canvas {
       display: block;
       margin: 0 auto;
@@ -235,9 +235,8 @@
     }
 
     // --- Drawing Functions ---
-    // Draw the static outer scale (outer circle with ticks & labels)
-    // Major ticks: every 10° (labeled), Minor ticks: every 5° (no label)
-    // For overlapping -180/180, only label for 180° is shown.
+    // Draw the static outer scale with major ticks every 10° (labeled) and minor ticks every 5° (no label)
+    // For overlapping -180°/180°, only the 180° label is shown.
     function drawStaticScale() {
       // Draw outer circle
       ctx.strokeStyle = "white";
@@ -262,7 +261,7 @@
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
         ctx.stroke();
-        // Label major ticks (skip -180° so only 180° is labeled)
+        // For major ticks, label them—skip -180° so only 180° is labeled.
         if (deg % 10 === 0 && deg !== -180) {
           const labelRadius = OUTER_RADIUS - 0.15;
           const [lx, ly] = wc_to_cc(labelRadius * Math.cos(rad), labelRadius * Math.sin(rad));
@@ -276,8 +275,8 @@
     }
 
     // Draw the inner rotating plate with ticks (rotates with slider angle)
-    // Major ticks every 10° (labeled), minor ticks every 5° (no label),
-    // and if -180° and 180° overlap, only the 180° label is shown.
+    // Major ticks every 10° (labeled), minor ticks every 5° (no label)
+    // If -180° and 180° overlap, only 180° is labeled.
     function drawPlate(rotationAngle) {
       ctx.strokeStyle = "white";
       ctx.lineWidth = 1;
@@ -301,7 +300,7 @@
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
         ctx.stroke();
-        // Label major ticks (skip -180° so only 180° is visible)
+        // Label major ticks, skipping -180° so only 180° is labeled.
         if (deg % 10 === 0 && deg !== -180) {
           const [lx, ly] = wc_to_cc((PLATE_RADIUS - 0.15) * Math.cos(rad), (PLATE_RADIUS - 0.15) * Math.sin(rad));
           ctx.fillStyle = "white";
@@ -394,10 +393,10 @@
       // 9. Draw a red dot at the final point (touching the outer static plate)
       if (rayPoints.length > 0) {
         const finalPoint = rayPoints[rayPoints.length - 1];
-        // Round final point to 3 decimal places to reduce jitter
+        // Round final point to 2 decimal places to reduce jitter of ±0.05 in x,y
         const roundedFinal = [
-          Math.round(finalPoint[0] * 1000) / 1000,
-          Math.round(finalPoint[1] * 1000) / 1000
+          Math.round(finalPoint[0] * 100) / 100,
+          Math.round(finalPoint[1] * 100) / 100
         ];
         const [fx, fy] = wc_to_cc(roundedFinal[0], roundedFinal[1]);
         ctx.fillStyle = "red";
