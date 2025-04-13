@@ -18,7 +18,6 @@
     #controls-top, #controls-bottom {
       margin: 1em;
     }
-    /* Remove canvas border to eliminate the square frame */
     canvas {
       display: block;
       margin: 0 auto;
@@ -35,75 +34,130 @@
   <div id="controls-top">
     <label for="shapeSelect">Hidden Object:</label>
     <select id="shapeSelect">
-      <option value="triangle">Triangle Hidden Object</option>
-      <option value="notched">Concave Notched Hidden Object</option>
-      <option value="complex">Complex Notched Hidden Object</option>
-      <option value="combo">Combo Hidden Object</option>
+      <option value="triangle">Object 1</option>
+      <option value="notched">Object 2</option>
+      <option value="complex">Object 3</option>
+      <option value="combo">Object 4</option>
     </select>
+    <label>
+      <input type="checkbox" id="showObject">
+      Show Hidden Object
+    </label>
   </div>
+
   <canvas id="simCanvas" width="800" height="800"></canvas>
+
   <div id="controls-bottom">
     <label for="rotationSlider">Object Rotation:</label>
     <input type="range" id="rotationSlider" min="0" max="360" step="1" value="0">
-    <span id="rotationLabel">0.0°</span>
+    <span id="rotationLabel"></span>
   </div>
 
   <script>
-    // --- Global Constants & Setup ---
     const canvas = document.getElementById('simCanvas');
     const ctx = canvas.getContext('2d');
     const shapeSelect = document.getElementById('shapeSelect');
+    const showObject = document.getElementById('showObject');
     const rotationSlider = document.getElementById('rotationSlider');
     const rotationLabel = document.getElementById('rotationLabel');
 
     const CENTER_X = canvas.width / 2;
     const CENTER_Y = canvas.height / 2;
-    const SCALE = 300;         // 1 world unit = 300 pixels
-    const OUTER_RADIUS = 1.25;   // Outer circle radius
-    const PLATE_RADIUS = 1.0;    // Inner (rotating) plate radius
-    const MAX_REFLECTIONS = 100;
+    const SCALE = 300;
+    const OUTER_RADIUS = 1.25;
+    const PLATE_RADIUS = 1.0;
     const EPSILON = 1e-6;
+    const MAX_REFLECTIONS = 100;
+    const laserOrigin = [0, -1.25];
+    const laserDir = [0, 1];
 
-    // --- Utility Functions ---
-    function toRadians(deg) {
-      return (Math.PI / 180) * deg;
-    }
-    function toDegrees(rad) {
-      return (180 / Math.PI) * rad;
-    }
-    // Convert world coordinates (x,y) to canvas coordinates
-    function wc_to_cc(x, y) {
-      return [CENTER_X + x * SCALE, CENTER_Y - y * SCALE];
-    }
+    function toRadians(deg) { return deg * Math.PI / 180; }
+    function wc_to_cc(x, y) { return [CENTER_X + x * SCALE, CENTER_Y - y * SCALE]; }
+    function dot([a, b], [c, d]) { return a * c + b * d; }
     function normalize([x, y]) {
       const mag = Math.hypot(x, y);
       return mag < EPSILON ? [0, 0] : [x / mag, y / mag];
-    }
-    function dot([a, b], [c, d]) {
-      return a * c + b * d;
     }
     function reflect(d, n) {
       const d_dot_n = dot(d, n);
       return [d[0] - 2 * d_dot_n * n[0], d[1] - 2 * d_dot_n * n[1]];
     }
+    function rotatePoint([x, y], angle) {
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      return [x * cos - y * sin, x * sin + y * cos];
+    }
+    function intersectCircle(origin, dir, radius) {
+      const [ox, oy] = origin;
+      const [dx, dy] = normalize(dir);
+      const a = dx * dx + dy * dy;
+      const b = 2 * (ox * dx + oy * dy);
+      const c = ox * ox + oy * oy - radius * radius;
+      const disc = b * b - 4 * a * c;
+      if (disc < 0) return null;
+      const sqrtD = Math.sqrt(disc);
+      const t = Math.min(...[(-b + sqrtD), (-b - sqrtD)].filter(t => t > EPSILON)) / (2 * a);
+      return [ox + t * dx, oy + t * dy];
+    }
+    function intersect(p0, dir, p1, p2) {
+      const v1 = [p0[0] - p1[0], p0[1] - p1[1]];
+      const v2 = [p2[0] - p1[0], p2[1] - p1[1]];
+      const v3 = [-dir[1], dir[0]];
+      const dotV = dot(v2, v3);
+      if (Math.abs(dotV) < EPSILON) return null;
+      const t1 = (v2[0] * v1[1] - v2[1] * v1[0]) / dotV;
+      const t2 = dot(v1, v3) / dotV;
+      if (t1 > EPSILON && t2 >= 0 && t2 <= 1) {
+        return [p0[0] + t1 * dir[0], p0[1] + t1 * dir[1]];
+      }
+      return null;
+    }
 
-    // --- Hidden Object Shape Functions ---
+    function reflectLaser(shape) {
+      let origin = [...laserOrigin], dir = [...laserDir];
+      const points = [origin];
+      for (let i = 0; i < MAX_REFLECTIONS; i++) {
+        let closest = null, minDist = Infinity, normal = null;
+        for (let j = 0; j < shape.length; j++) {
+          const a = shape[j], b = shape[(j + 1) % shape.length];
+          const hit = intersect(origin, dir, a, b);
+          if (hit) {
+            const dist = Math.hypot(hit[0] - origin[0], hit[1] - origin[1]);
+            if (dist < minDist) {
+              minDist = dist;
+              closest = hit;
+              const edge = normalize([b[0] - a[0], b[1] - a[1]]);
+              let n = [-edge[1], edge[0]];
+              if (dot(n, dir) > 0) n = [-n[0], -n[1]];
+              normal = n;
+            }
+          }
+        }
+        if (!closest || !normal) break;
+        points.push(closest);
+        dir = reflect(dir, normal);
+        origin = closest;
+      }
+      const finalHit = intersectCircle(origin, dir, OUTER_RADIUS);
+      if (finalHit) points.push(finalHit);
+      return points;
+    }
+
     function shape_triangle() {
-      const base = [[-0.5, -0.5], [0.5, -0.5], [0.0, 0.5]];
-      const scale = 0.5;
-      return base.map(([x, y]) => [scale * x, scale * y]);
+      const base = [[-0.5, -0.5], [0.5, -0.5], [0, 0.5]];
+      return base.map(([x, y]) => [x * 0.5, y * 0.5]);
     }
     function shape_notched() {
-      return [
-        [-0.3, -0.5], [0.5, -0.5], [0.2,  0.0],
-        [0.5,  0.5], [-0.3, 0.5], [-0.5,  0.0]
-      ];
+      return [[-0.3, -0.5], [0.5, -0.5], [0.2, 0], [0.5, 0.5], [-0.3, 0.5], [-0.5, 0]];
     }
     function shape_complex() {
-      return [
-        [ 0.0,  0.6], [ 0.0,  0.4], [ 0.6,  0.4],
-        [ 0.4, -0.4], [-0.1,  0.2], [-0.6, -0.2]
-      ];
+      const points = [], outer = [0.52, 0.48, 0.54, 0.5, 0.46], inner = [0.23, 0.28, 0.25, 0.2, 0.27];
+      for (let i = 0; i < 5; i++) {
+        const angle1 = 2 * Math.PI * i / 5 - Math.PI / 2 + (i % 2 === 0 ? 0.01 : -0.01);
+        const angle2 = angle1 + Math.PI / 5;
+        points.push([outer[i] * Math.cos(angle1), outer[i] * Math.sin(angle1)]);
+        points.push([inner[i] * Math.cos(angle2), inner[i] * Math.sin(angle2)]);
+      }
+      return points;
     }
     function shape_combo() {
       const convexDepth = 0.2;
@@ -125,295 +179,126 @@
       const left_edge = [[-0.5, -0.5], [-0.5, 0.5]];
       return top_edge.concat(right_edge.slice(1), bottom_edge, left_edge.slice(1));
     }
-    // Rotate a point by an angle (radians)
-    function rotatePoint([x, y], angle) {
-      const cosA = Math.cos(angle);
-      const sinA = Math.sin(angle);
-      return [x * cosA - y * sinA, x * sinA + y * cosA];
-    }
 
-    // --- Intersection and Reflection Functions ---
-    function intersect(laserOrigin, laserDir, p1, p2) {
-      const v1 = [laserOrigin[0] - p1[0], laserOrigin[1] - p1[1]];
-      const v2 = [p2[0] - p1[0], p2[1] - p1[1]];
-      const v3 = [-laserDir[1], laserDir[0]];
-      const dotV2V3 = dot(v2, v3);
-      if (Math.abs(dotV2V3) < EPSILON) return null;
-      const t1 = (v2[0] * v1[1] - v2[1] * v1[0]) / dotV2V3;
-      const t2 = dot(v1, v3) / dotV2V3;
-      if (t1 >= 1e-6 && t2 >= 0 && t2 <= 1) {
-        return [laserOrigin[0] + t1 * laserDir[0], laserOrigin[1] + t1 * laserDir[1]];
-      }
-      return null;
-    }
-    function intersectCircle(origin, direction, radius) {
-      const [ox, oy] = origin;
-      const ndir = normalize(direction);
-      const [dx, dy] = ndir;
-      const a = dx * dx + dy * dy;
-      const b = 2 * (ox * dx + oy * dy);
-      const c = ox * ox + oy * oy - radius * radius;
-      const disc = b * b - 4 * a * c;
-      if (disc < 0) return null;
-      const sqrtDisc = Math.sqrt(disc);
-      const t1 = (-b + sqrtDisc) / (2 * a);
-      const t2 = (-b - sqrtDisc) / (2 * a);
-      const valid = [t1, t2].filter(t => t > 1e-6);
-      if (valid.length === 0) return null;
-      const t = Math.min(...valid);
-      return [ox + t * dx, oy + t * dy];
-    }
-    function reflectLaser(shapeVertices) {
-      let laserOrigin = [0.0, -1.25];
-      let laserDir    = [0.0,  1.0];
-      const points = [ [...laserOrigin] ];
-      let currentOrigin = [...laserOrigin];
-      let currentDir    = [...laserDir];
-      const nVerts = shapeVertices.length;
-      let reflections = 0;
-      const tol = 1e-6;
-
-      while (reflections < MAX_REFLECTIONS) {
-        let bestDist = Infinity;
-        let bestHit = null;
-        let bestEdge = null;
-        let vertexHitIndex = null;
-
-        for (let i = 0; i < nVerts; i++) {
-          const p1 = shapeVertices[i];
-          const p2 = shapeVertices[(i + 1) % nVerts];
-          const hit = intersect(currentOrigin, currentDir, p1, p2);
-          if (hit) {
-            const dist = Math.hypot(hit[0] - currentOrigin[0], hit[1] - currentOrigin[1]);
-            if (dist > EPSILON && dist < bestDist) {
-              bestDist = dist;
-              bestHit = hit;
-              bestEdge = [p1, p2];
-              if (Math.hypot(hit[0] - p1[0], hit[1] - p1[1]) < tol) {
-                vertexHitIndex = i;
-              } else if (Math.hypot(hit[0] - p2[0], hit[1] - p2[1]) < tol) {
-                vertexHitIndex = (i + 1) % nVerts;
-              } else {
-                vertexHitIndex = null;
-              }
-            }
-          }
-        }
-        if (!bestHit) break;
-
-        points.push(bestHit);
-        reflections++;
-
-        if (vertexHitIndex !== null) {
-          const v = vertexHitIndex;
-          const prev = shapeVertices[(v - 1 + nVerts) % nVerts];
-          const curr = shapeVertices[v];
-          const next = shapeVertices[(v + 1) % nVerts];
-          let normal1 = [-(curr[1] - prev[1]), curr[0] - prev[0]];
-          let normal2 = [-(next[1] - curr[1]), next[0] - curr[0]];
-          if (dot(normal1, currentDir) > 0) normal1 = [-normal1[0], -normal1[1]];
-          if (dot(normal2, currentDir) > 0) normal2 = [-normal2[0], -normal2[1]];
-          const avgNormal = [normal1[0] + normal2[0], normal1[1] + normal2[1]];
-          const magAvg = Math.hypot(avgNormal[0], avgNormal[1]);
-          const newNormal = magAvg > EPSILON
-            ? [avgNormal[0] / magAvg, avgNormal[1] / magAvg]
-            : normalize(normal1);
-          currentDir = reflect(currentDir, newNormal);
-        } else {
-          const [p1, p2] = bestEdge;
-          let edgeVec = [p2[0] - p1[0], p2[1] - p1[1]];
-          edgeVec = normalize(edgeVec);
-          let newNormal = [-edgeVec[1], edgeVec[0]];
-          if (dot(newNormal, currentDir) > 0) newNormal = [-newNormal[0], -newNormal[1]];
-          currentDir = reflect(currentDir, newNormal);
-        }
-        currentOrigin = bestHit;
-      }
-      const finalHit = intersectCircle(currentOrigin, currentDir, OUTER_RADIUS);
-      if (finalHit) points.push(finalHit);
-      return points;
-    }
-
-    // --- Drawing Functions ---
-    // Draw the static outer scale with major ticks every 10° (labeled) and minor ticks every 5° (no label)
-    // For overlapping -180°/180°, only the 180° label is shown.
     function drawStaticScale() {
-      // Draw outer circle
       ctx.strokeStyle = "white";
       ctx.lineWidth = 1;
-      ctx.beginPath();
       const [cx, cy] = wc_to_cc(0, 0);
+      ctx.beginPath();
       ctx.arc(cx, cy, OUTER_RADIUS * SCALE, 0, 2 * Math.PI);
       ctx.stroke();
-
       for (let deg = -180; deg <= 180; deg += 5) {
         const rad = toRadians(deg - 90);
-        let tickOffset;
-        if (deg % 10 === 0) {  // Major tick
-          tickOffset = 0.05;
-        } else {              // Minor tick
-          tickOffset = 0.02;
-        }
-        const r2 = OUTER_RADIUS - tickOffset;
-        const [x1, y1] = wc_to_cc(OUTER_RADIUS * Math.cos(rad), OUTER_RADIUS * Math.sin(rad));
+        const tick = deg % 10 === 0 ? 0.05 : 0.02;
+        const r1 = OUTER_RADIUS, r2 = OUTER_RADIUS - tick;
+        const [x1, y1] = wc_to_cc(r1 * Math.cos(rad), r1 * Math.sin(rad));
         const [x2, y2] = wc_to_cc(r2 * Math.cos(rad), r2 * Math.sin(rad));
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-        // For major ticks, label them—skip -180° so only 180° is labeled.
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
         if (deg % 10 === 0 && deg !== -180) {
-          const labelRadius = OUTER_RADIUS - 0.15;
-          const [lx, ly] = wc_to_cc(labelRadius * Math.cos(rad), labelRadius * Math.sin(rad));
-          ctx.fillStyle = "white";
-          ctx.font = "12px sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
+          const [lx, ly] = wc_to_cc((OUTER_RADIUS - 0.12) * Math.cos(rad), (OUTER_RADIUS - 0.12) * Math.sin(rad));
+          ctx.fillStyle = "white"; ctx.font = "16px sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
           ctx.fillText(`${deg}°`, lx, ly);
         }
       }
     }
 
-    // Draw the inner rotating plate with ticks (rotates with slider angle)
-    // Major ticks every 10° (labeled), minor ticks every 5° (no label)
-    // If -180° and 180° overlap, only 180° is labeled.
-    function drawPlate(rotationAngle) {
+    function drawPlate(angleDeg) {
       ctx.strokeStyle = "white";
       ctx.lineWidth = 1;
       const [cx, cy] = wc_to_cc(0, 0);
       ctx.beginPath();
       ctx.arc(cx, cy, PLATE_RADIUS * SCALE, 0, 2 * Math.PI);
       ctx.stroke();
-
       for (let deg = -180; deg <= 180; deg += 5) {
-        const rotatedDeg = deg + rotationAngle;
-        const rad = toRadians(rotatedDeg - 90);
-        let tickOffset;
-        if (deg % 10 === 0) {
-          tickOffset = 0.05;
-        } else {
-          tickOffset = 0.02;
-        }
-        const [x1, y1] = wc_to_cc(PLATE_RADIUS * Math.cos(rad), PLATE_RADIUS * Math.sin(rad));
-        const [x2, y2] = wc_to_cc((PLATE_RADIUS - tickOffset) * Math.cos(rad), (PLATE_RADIUS - tickOffset) * Math.sin(rad));
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-        // Label major ticks, skipping -180° so only 180° is labeled.
+        const rad = toRadians(deg + angleDeg - 90);
+        const tick = deg % 10 === 0 ? 0.05 : 0.02;
+        const r1 = PLATE_RADIUS, r2 = PLATE_RADIUS - tick;
+        const [x1, y1] = wc_to_cc(r1 * Math.cos(rad), r1 * Math.sin(rad));
+        const [x2, y2] = wc_to_cc(r2 * Math.cos(rad), r2 * Math.sin(rad));
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
         if (deg % 10 === 0 && deg !== -180) {
-          const [lx, ly] = wc_to_cc((PLATE_RADIUS - 0.15) * Math.cos(rad), (PLATE_RADIUS - 0.15) * Math.sin(rad));
-          ctx.fillStyle = "white";
-          ctx.font = "10px sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
+          const [lx, ly] = wc_to_cc((PLATE_RADIUS - 0.13) * Math.cos(rad), (PLATE_RADIUS - 0.13) * Math.sin(rad));
+          ctx.fillStyle = "white"; ctx.font = "14px sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
           ctx.fillText(`${deg}°`, lx, ly);
         }
       }
     }
 
-    // --- Main Simulation Draw Function ---
     function drawScene() {
-      // Clear the canvas completely
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Get rotation angle from slider (in degrees and radians)
       const angleDeg = parseFloat(rotationSlider.value);
       const angleRad = toRadians(angleDeg);
-      rotationLabel.textContent = `${angleDeg.toFixed(1)}°`;
+      rotationLabel.textContent = showObject.checked ? `${angleDeg.toFixed(1)}°` : "";
 
-      // 1. Draw static outer scale (circle with ticks/labels)
       drawStaticScale();
-
-      // 2. Draw inner rotating plate (ticks rotate with slider)
       drawPlate(angleDeg);
 
-      // 3. Choose hidden object shape from dropdown
-      let baseShape;
+      let shape;
       switch (shapeSelect.value) {
-        case "triangle":
-          baseShape = shape_triangle();
-          break;
-        case "notched":
-          baseShape = shape_notched();
-          break;
-        case "complex":
-          baseShape = shape_complex();
-          break;
-        case "combo":
-          baseShape = shape_combo();
-          break;
-        default:
-          baseShape = shape_triangle();
+        case "triangle": shape = shape_triangle(); break;
+        case "notched": shape = shape_notched(); break;
+        case "complex": shape = shape_complex(); break;
+        case "combo": shape = shape_combo(); break;
       }
-      // 4. Rotate the base shape by the current angle
-      const rotatedShape = baseShape.map(pt => rotatePoint(pt, angleRad));
-
-      // 5. Draw the hidden object shape (outline in white)
-      ctx.strokeStyle = "white";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      rotatedShape.forEach(([x, y], i) => {
-        const [cx, cy] = wc_to_cc(x, y);
-        if (i === 0) ctx.moveTo(cx, cy);
-        else ctx.lineTo(cx, cy);
-      });
-      const [c0x, c0y] = wc_to_cc(rotatedShape[0][0], rotatedShape[0][1]);
-      ctx.lineTo(c0x, c0y);
-      ctx.stroke();
-
-      // 6. Compute the laser reflection path using the rotated shape
-      const rayPoints = reflectLaser(rotatedShape);
-
-      // 7. Draw the laser path (red line)
-      ctx.strokeStyle = "red";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      const [sx, sy] = wc_to_cc(rayPoints[0][0], rayPoints[0][1]);
-      ctx.moveTo(sx, sy);
-      for (let i = 1; i < rayPoints.length; i++) {
-        const [wx, wy] = rayPoints[i];
-        const [cx, cy] = wc_to_cc(wx, wy);
-        ctx.lineTo(cx, cy);
+      const rotated = shape.map(p => rotatePoint(p, angleRad));
+      if (showObject.checked) {
+        ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.beginPath();
+        rotated.forEach(([x, y], i) => {
+          const [cx, cy] = wc_to_cc(x, y);
+          if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+        });
+        ctx.closePath(); ctx.stroke();
       }
-      ctx.stroke();
 
-      // 8. Draw red dots at intermediate reflection points (exclude first & last)
-      if (rayPoints.length > 2) {
+      const ray = reflectLaser(rotated);
+      ctx.strokeStyle = "red"; ctx.lineWidth = 2;
+      if (showObject.checked) {
+        ctx.beginPath(); const [sx, sy] = wc_to_cc(ray[0][0], ray[0][1]); ctx.moveTo(sx, sy);
+        for (let i = 1; i < ray.length; i++) {
+          const [x, y] = wc_to_cc(ray[i][0], ray[i][1]); ctx.lineTo(x, y);
+        }
+        ctx.stroke();
         ctx.fillStyle = "red";
-        for (let i = 1; i < rayPoints.length - 1; i++) {
-          const [wx, wy] = rayPoints[i];
-          const [cx, cy] = wc_to_cc(wx, wy);
-          ctx.beginPath();
-          ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
-          ctx.fill();
+        for (let i = 1; i < ray.length - 1; i++) {
+          const [x, y] = wc_to_cc(ray[i][0], ray[i][1]);
+          ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.fill();
+        }
+      } else {
+        const entry = intersectCircle(laserOrigin, laserDir, PLATE_RADIUS);
+        if (entry) {
+          const [sx, sy] = wc_to_cc(laserOrigin[0], laserOrigin[1]);
+          const [ex, ey] = wc_to_cc(entry[0], entry[1]);
+          ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+          const [cx, cy] = wc_to_cc(0, 0);
+          ctx.fillStyle = "white"; ctx.font = "bold 100px sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("?", cx, cy);
         }
       }
-      
-      // 9. Draw a red dot at the final point (touching the outer static plate)
-      if (rayPoints.length > 0) {
-        const finalPoint = rayPoints[rayPoints.length - 1];
-        // Round final point to 2 decimal places to reduce jitter of ±0.05 in x,y
-        const roundedFinal = [
-          Math.round(finalPoint[0] * 100) / 100,
-          Math.round(finalPoint[1] * 100) / 100
-        ];
-        const [fx, fy] = wc_to_cc(roundedFinal[0], roundedFinal[1]);
-        ctx.fillStyle = "red";
-        ctx.beginPath();
-        ctx.arc(fx, fy, 4, 0, 2 * Math.PI);
+
+      if (ray.length > 0) {
+        const final = ray[ray.length - 1];
+        const [fx, fy] = wc_to_cc(final[0], final[1]);
+        const jitterX = (Math.random() - 0.5) * 8;
+        const jitterY = (Math.random() - 0.5) * 8;
+        ctx.fillStyle = "red"; ctx.beginPath();
+        ctx.arc(fx + jitterX, fy + jitterY, 4, 0, 2 * Math.PI);
         ctx.fill();
       }
     }
 
-    // --- Event Listeners & Initial Draw ---
-    rotationSlider.addEventListener("input", drawScene);
+    function loop() {
+      drawScene(); requestAnimationFrame(loop);
+    }
+
     shapeSelect.addEventListener("change", drawScene);
-    drawScene();
+    rotationSlider.addEventListener("input", drawScene);
+    showObject.addEventListener("change", drawScene);
+    loop();
   </script>
 </body>
 </html>
-
 
 
 
